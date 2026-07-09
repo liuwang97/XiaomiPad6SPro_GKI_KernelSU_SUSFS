@@ -312,6 +312,26 @@ jobs:
             echo "最终 clang: $(grep -E '^CLANG_VERSION=' "$CONSTANTS" | head -1)"
           fi
 
+          # ------------------------------------------------------------
+          # 剥离需要定制 clang(内置 MLGO 模型 / Polly project)的 codegen flag。
+          # serein 从 hfdem 继承的这些 -mllvm 优化(regalloc-advisor / hot-cold-split
+          # / Polly)在 stock AOSP clang 上会报错(第一个 .o 即崩:
+          # "regalloc eviction advisor ... Using default")。它们是 codegen 层激进项,
+          # 与内存优化(zram/mm/sched/cpuidle/ssg 均在源码层)无关,去掉不损失内存收益。
+          # 保留 -O3 与 -import-instr-limit(stock clang 支持)。
+          # ------------------------------------------------------------
+          MK="common/Makefile"
+          if [ -f "$MK" ]; then
+            sed -i '/-regalloc-enable-advisor=release/d' "$MK"   # MLGO 寄存器分配,需内置模型
+            sed -i '/-hot-cold-split=true/d' "$MK"               # 冷热代码分离,激进非必需
+            echo "已从 Makefile 剥离 MLGO(regalloc-advisor / hot-cold-split)flag"
+          fi
+          POLLY_DEF="common/arch/arm64/configs/gki_defconfig"
+          if grep -q '^CONFIG_LLVM_POLLY=y' "$POLLY_DEF"; then
+            sed -i 's/^CONFIG_LLVM_POLLY=y/# CONFIG_LLVM_POLLY is not set/' "$POLLY_DEF"
+            echo "已关闭 CONFIG_LLVM_POLLY(stock clang 不含 Polly project)"
+          fi
+
       - name: 应用 Stock Config 伪装
         run: |
           STOCK_SRC="$GITHUB_WORKSPACE/config/stock_defconfig"
