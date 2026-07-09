@@ -290,6 +290,28 @@ jobs:
           rm -f common/drivers/kernelsu
           echo "serein common 树就位: $(grep -E '^(VERSION|PATCHLEVEL|SUBLEVEL) ' common/Makefile | tr '\n' ' ')"
 
+          # ------------------------------------------------------------
+          # 对齐 clang:serein 的 build.config.constants pin 了 CLANG_VERSION,
+          # 若该版本不在 manifest 同步下来的 prebuilts/clang 里(版本窗口错配),
+          # legacy build.sh 会因 clang 目录缺失报 "clang: not found"。
+          # 自动改用 prebuilts 中实际存在的最新 clang(编译器版本不影响 KMI CRC)。
+          # ------------------------------------------------------------
+          CONSTANTS="common/build.config.constants"
+          if [ -f "$CONSTANTS" ]; then
+            WANT_CLANG=$(grep -E '^CLANG_VERSION=' "$CONSTANTS" | head -1 | cut -d= -f2)
+            if [ -n "$WANT_CLANG" ] && [ ! -d "prebuilts/clang/host/linux-x86/clang-$WANT_CLANG" ]; then
+              HAVE_CLANG=$(ls -d prebuilts/clang/host/linux-x86/clang-r* 2>/dev/null | sed 's#.*/clang-##' | sort -V | tail -1)
+              if [ -n "$HAVE_CLANG" ]; then
+                echo "::warning::serein pin clang-$WANT_CLANG 不在 prebuilts,改用实际存在的 clang-$HAVE_CLANG"
+                sed -i "s/^CLANG_VERSION=.*/CLANG_VERSION=$HAVE_CLANG/" "$CONSTANTS"
+              else
+                echo "::error::prebuilts/clang/host/linux-x86 下无任何 clang-r* 目录"
+                ls -la prebuilts/clang/host/linux-x86/ 2>&1 | head -20 || true
+              fi
+            fi
+            echo "最终 clang: $(grep -E '^CLANG_VERSION=' "$CONSTANTS" | head -1)"
+          fi
+
       - name: 应用 Stock Config 伪装
         run: |
           STOCK_SRC="$GITHUB_WORKSPACE/config/stock_defconfig"
