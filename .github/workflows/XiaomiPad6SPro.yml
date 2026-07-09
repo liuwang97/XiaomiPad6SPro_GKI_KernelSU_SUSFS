@@ -122,8 +122,10 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - sub_level: "178"
-            os_patch_level: "2025-03"
+          # serein 优化树 = 5.15.194 / 2025-12 基线(build.yml 中替换 common)
+          # manifest 用同基线拉取匹配的 build 工具链 + clang r547379
+          - sub_level: "194"
+            os_patch_level: "2025-12"
     uses: ./.github/workflows/build.yml
     secrets: inherit
     with:

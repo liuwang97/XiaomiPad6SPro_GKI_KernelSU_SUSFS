@@ -271,6 +271,25 @@ jobs:
           $REPO --trace sync -c -j$(nproc --all) --no-tags --fail-fast
           echo "REMOTE_BRANCH=$REMOTE_BRANCH" >> $GITHUB_ENV
 
+          # ============================================================
+          # 用 serein 优化内核树替换 stock ACK common
+          # serein = hfdem 主线严格超集(小米 zram / lz4 1.10 / Polly / schedhorizon
+          #          / ssg / cpuidle backports / CRC-ignore 等全含)+ 最新 5.15.194 LTS
+          # 详见 pad6spro-kernel/docs/hfdem-route.md
+          # 只替换内核源码(common),保留 manifest 拉取的 build/ prebuilts/clang/ tools/bazel
+          # 二者同为 2025-12 基线,kleaf 工具链与源码 BUILD.bazel 匹配
+          # ============================================================
+          SEREIN_REPO="${SEREIN_REPO:-https://github.com/serein-213/android_gki_kernel_5.15_common.git}"
+          SEREIN_BRANCH="${SEREIN_BRANCH:-android13-5.15-2025-12}"
+          echo "=== 替换 common 为 serein 优化树 ($SEREIN_BRANCH) ==="
+          rm -rf common
+          git clone --depth=1 -b "$SEREIN_BRANCH" "$SEREIN_REPO" common
+          rm -rf common/.git
+          # 清理 serein 预置的 kernelsu 符号链接(指向不存在的 ../KernelSU/kernel),
+          # 避免与后续 ReSukiSU/SukiSU 注入冲突
+          rm -f common/drivers/kernelsu
+          echo "serein common 树就位: $(grep -E '^(VERSION|PATCHLEVEL|SUBLEVEL) ' common/Makefile | tr '\n' ' ')"
+
       - name: 应用 Stock Config 伪装
         run: |
           STOCK_SRC="$GITHUB_WORKSPACE/config/stock_defconfig"
@@ -668,11 +687,22 @@ jobs:
             cd ./common
             wget "https://raw.githubusercontent.com/Goldzxcbug/Droidspaces_Kernel_patch/refs/heads/main/NTsync/ntsync_base.patch"
             wget "https://raw.githubusercontent.com/Goldzxcbug/Droidspaces_Kernel_patch/refs/heads/main/NTsync/ntsync_compat_android13-5.15.patch"
-            patch -p1 < 'ntsync_base.patch'
-            patch -p1 < 'ntsync_compat_android13-5.15.patch'            
+            # serein 树相对 stock ACK 有改动，ntsync 补丁可能上下文不匹配；
+            # 容错处理，失败不中断构建(NTSYNC 非本次目标，仅为保留原流水线能力)
+            NTSYNC_OK=1
+            if ! patch -p1 -F 3 --forward < 'ntsync_base.patch'; then
+              echo "::warning::ntsync_base.patch 应用失败，跳过 NTSYNC"
+              NTSYNC_OK=0
+            fi
+            if [ "$NTSYNC_OK" = "1" ] && ! patch -p1 -F 3 --forward < 'ntsync_compat_android13-5.15.patch'; then
+              echo "::warning::ntsync_compat 补丁应用失败，跳过 NTSYNC"
+              NTSYNC_OK=0
+            fi
             cd ../
-            #开启NTsync内核配置
-            echo "CONFIG_NTSYNC=y" >> ./common/arch/arm64/configs/gki_defconfig
+            # 仅当补丁成功时开启 NTsync 内核配置
+            if [ "$NTSYNC_OK" = "1" ]; then
+              echo "CONFIG_NTSYNC=y" >> ./common/arch/arm64/configs/gki_defconfig
+            fi
             
       - name: 集成 Droidspaces 支持
         if: inputs.droidspaces != 'off'
