@@ -429,10 +429,36 @@ jobs:
       - name: 添加 KernelSU
         working-directory: ${{ env.KERNEL_ROOT }}
         run: |
+          # 加固 KSU setup.sh 拉取:下载到文件+校验是脚本+重试,
+          # 避免 raw.githubusercontent.com 瞬时 429/404 时把错误页 `| bash` 执行导致构建失败。
+          # 文件模式运行,需剥离 bash 的 -s(stdin)标志,只传真实分支参数。
+          ksu_setup() {
+            local url="$1"; shift
+            local tmp="/tmp/ksu_setup_$$.sh"
+            local ok=0
+            for i in 1 2 3 4 5; do
+              if curl -LSs --retry 3 --retry-delay 3 --fail "$url" -o "$tmp" \
+                 && head -c2 "$tmp" | grep -q '#!'; then
+                ok=1; break
+              fi
+              echo "KSU setup 下载失败(第 $i/5 次),15s 后重试... ($url)"
+              sleep 15
+            done
+            if [ "$ok" != "1" ]; then
+              echo "::error::无法下载 KSU setup 脚本: $url"
+              echo "---- 最后一次响应内容(前 20 行) ----"; head -20 "$tmp" 2>/dev/null || true
+              exit 1
+            fi
+            local args=()
+            local a
+            for a in "$@"; do [ "$a" = "-s" ] || args+=("$a"); done
+            bash "$tmp" "${args[@]}"
+          }
+
           case "${{ inputs.ksu_variant }}" in
             "Official")
               echo "添加 KernelSU 官方版..."
-              curl -LSs "https://raw.githubusercontent.com/tiann/KernelSU/main/kernel/setup.sh" | bash $BRANCH
+              ksu_setup "https://raw.githubusercontent.com/tiann/KernelSU/main/kernel/setup.sh" $BRANCH
 
               cd KernelSU
               KSU_GIT_VERSION=$(git rev-list --count HEAD)
@@ -446,15 +472,15 @@ jobs:
               ;;
             "Next")
               echo "添加 KernelSU-Next..."
-              curl -LSs "https://raw.githubusercontent.com/KernelSU-Next/KernelSU-Next/refs/heads/dev/kernel/setup.sh" | bash -s dev_susfs
+              ksu_setup "https://raw.githubusercontent.com/KernelSU-Next/KernelSU-Next/refs/heads/dev/kernel/setup.sh" dev_susfs
               ;;
             "SukiSU")
               echo "添加 SukiSU..."
-              curl -LSs "https://raw.githubusercontent.com/SukiSU-Ultra/SukiSU-Ultra/main/kernel/setup.sh" | bash $BRANCH
+              ksu_setup "https://raw.githubusercontent.com/SukiSU-Ultra/SukiSU-Ultra/main/kernel/setup.sh" $BRANCH
               ;;
             "ReSukiSU")
               echo "添加 ReSukiSU..."
-              curl -LSs "https://raw.githubusercontent.com/ReSukiSU/ReSukiSU/main/kernel/setup.sh" | bash $BRANCH
+              ksu_setup "https://raw.githubusercontent.com/ReSukiSU/ReSukiSU/main/kernel/setup.sh" $BRANCH
               ;;
           esac
 
